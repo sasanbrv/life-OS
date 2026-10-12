@@ -70,7 +70,7 @@ export default function LoginPage() {
 
       // موقتاً بعد از موفقیت به صفحه اصلی می‌رویم.
       // بعد از پیاده‌سازی نشست امن، مسیر نهایی را تنظیم می‌کنیم.
-      window.location.href = "/";
+      window.location.href = "/dashboard";
     } catch {
       setServerError(
         "Could not connect to the server. Please try again."
