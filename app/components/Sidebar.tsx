@@ -141,10 +141,10 @@ export default function Sidebar({ userName }: SidebarProps) {
         throw new Error("Logout failed");
       }
 
-      router.replace("/login");
+      router.replace("/");
       router.refresh();
     } catch {
-      setLogoutError("خروج انجام نشد. دوباره تلاش کن.");
+      setLogoutError("logout faild please try again");
       setLoggingOut(false);
     }
   }

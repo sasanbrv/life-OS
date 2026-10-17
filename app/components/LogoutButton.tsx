@@ -20,7 +20,7 @@ export default function LogoutButton() {
         throw new Error("Logout failed");
       }
 
-      router.push("/login");
+      router.push("/");
       router.refresh();
     } catch (error) {
       console.error("Logout failed:", error);

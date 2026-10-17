@@ -1,1690 +1,728 @@
+
 "use client";
 
-import {
+import { useCallback, useEffect, useState } from "react";
+import HabitStatus from "@/app/components/habits/HabitStatus";
+import DayCountdown from "@/app/components/tasks/DayCountdown";
+import TaskCalendar from "@/app/components/tasks/TaskCalendar";
+import TaskForm from "@/app/components/tasks/TaskForm";
+import TaskFilters, {
+  type TaskView,
+} from "@/app/components/tasks/TaskFilters";
+import TaskList from "@/app/components/tasks/TaskList";
+import type { Task } from "@/app/components/tasks/TaskItem";
+import DailyNote from "@/app/components/tasks/DailyNote";
 
-  useCallback,
+type TaskStats = {
+  date: string;
+  today: string;
+  timeZone: string;
+  total: number;
+  completed: number;
+  missed: number;
+  pending: number;
+  completionRate: number;
+};
 
-  useEffect,
-
-  useMemo,
-
-  useState,
-
-  type FormEvent,
-
-} from "react";
-
-import CategoryManager from "./components/CategoryManager";
-
-import TaskBoard, { type BoardTask } from "./components/TaskBoard";
-import SubtaskList from "./components/SubtaskList";
-import TaskCalendar from "./components/TaskCalendar";
-import TaskSort, {
-  type TaskSortField,
-  type TaskSortOrder,
-} from "./components/TaskSort";
-
-type TaskStatus = "TODO" | "IN_PROGRESS" | "DONE";
-
-type TaskPriority = "LOW" | "MEDIUM" | "HIGH";
-
-type TaskFilter = "ALL" | TaskStatus;
-
-type Category = {
-
+type Habit = {
   id: string;
-
-  name: string;
-
-  color: string;
-
-  isDefault: boolean;
-
-};
-
-type Task = {
-
-  id: string;
-
   title: string;
-
-  description: string | null;
-
-  status: TaskStatus;
-
-  priority: TaskPriority;
-
-  dueDate: string | null;
-
-  createdAt: string;
-
-  updatedAt: string;
-
-  categoryId: string | null;
-
-  category?: Category | null;
-
+  isActive: boolean;
+  recurrence: {
+    days: number[];
+  };
 };
 
-type TaskForm = {
+async function readJson(response: Response) {
+  const data = await response.json().catch(() => null);
 
-  title: string;
+  if (!response.ok) {
+    throw new Error(
+      data?.error || data?.message || "The request failed.",
+    );
+  }
 
-  description: string;
+  return data;
+}
 
-  status: TaskStatus;
+function formatDate(value: string) {
+  const date = new Date(`${value.slice(0, 10)}T12:00:00Z`);
 
-  priority: TaskPriority;
-
-  dueDate: string;
-
-  categoryId: string;
-
-};
-
-type ApiError = { message?: string };
-
-const initialForm: TaskForm = {
-
-  title: "",
-
-  description: "",
-
-  status: "TODO",
-
-  priority: "MEDIUM",
-
-  dueDate: "",
-
-  categoryId: "",
-
-};
-
-const statusLabels: Record<TaskStatus, string> = {
-
-  TODO: "To Do",
-
-  IN_PROGRESS: "In Progress",
-
-  DONE: "Done",
-
-};
-
-const priorityColors: Record<TaskPriority, string> = {
-
-  LOW: "bg-sky-500/10 text-sky-300",
-
-  MEDIUM: "bg-amber-500/10 text-amber-300",
-
-  HIGH: "bg-red-500/10 text-red-300",
-
-};
-
-function formatDate(value: string | null) {
-
-  if (!value) return "No due date";
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return "Invalid date";
-
-  return new Intl.DateTimeFormat("en-US", {
-
-    year: "numeric",
-
-    month: "short",
-
+  return new Intl.DateTimeFormat("en", {
+    weekday: "long",
+    month: "long",
     day: "numeric",
-
+    year: "numeric",
+    timeZone: "UTC",
   }).format(date);
-
 }
 
-function dateInputValue(value: string | null) {
-
-  if (!value) return "";
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return "";
-
-  const year = date.getFullYear();
-
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-
-  const day = String(date.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-
+function Stat({
+  label,
+  value,
+  accent = false,
+}: {
+  label: string;
+  value: string | number;
+  accent?: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-white/[0.07] bg-white/[0.035] p-3 transition-colors hover:border-violet-400/20 hover:bg-white/[0.05]">
+      <p className="text-xs font-medium text-slate-500">{label}</p>
+      <p
+        className={`mt-1.5 text-xl font-semibold tracking-tight tabular-nums ${
+          accent ? "text-violet-200" : "text-slate-100"
+        }`}
+      >
+        {value}
+      </p>
+    </div>
+  );
 }
 
-async function readJson<T>(response: Response): Promise<T> {
-
-  return response.json() as Promise<T>;
-
+function CalendarIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="h-4 w-4"
+    >
+      <rect
+        x="3.5"
+        y="5"
+        width="17"
+        height="15.5"
+        rx="2.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M7.5 3.5v3M16.5 3.5v3M3.5 9.5h17"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
 }
 
 export default function TasksPage() {
+  const [selectedDate, setSelectedDate] = useState("");
+  const [today, setToday] = useState("");
+  const [timeZone, setTimeZone] = useState("UTC");
+  const [view, setView] = useState<TaskView>("day");
 
   const [tasks, setTasks] = useState<Task[]>([]);
-
-  const [categories, setCategories] = useState<Category[]>([]);
-
-  const [form, setForm] = useState<TaskForm>(initialForm);
-
-  const [editingId, setEditingId] = useState<string | null>(null);
-
-  const [search, setSearch] = useState("");
-
-  const [filter, setFilter] = useState<TaskFilter>("ALL");
-
-  const [selectedCategoryId, setSelectedCategoryId] = useState("");
-
-  const [viewMode, setViewMode] = useState<"LIST" | "KANBAN" | "CALENDAR">("LIST");
-  const [sortField, setSortField] = useState<TaskSortField>("createdAt");
-  const [sortOrder, setSortOrder] = useState<TaskSortOrder>("desc");
-
+  const [stats, setStats] = useState<TaskStats | null>(null);
   const [loading, setLoading] = useState(true);
-
-  const [submitting, setSubmitting] = useState(false);
-
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-
   const [error, setError] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
+  const [habits, setHabits] = useState<Habit[]>([]);
 
-  const [success, setSuccess] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
 
-  const loadTasks = useCallback(async (showLoading = true) => {
+    async function initialize() {
+      try {
+        const response = await fetch("/api/tasks?view=day", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
 
-    if (showLoading) setLoading(true);
+        const data = await readJson(response);
 
-    setError("");
+        if (typeof data.today !== "string") {
+          throw new Error("The server did not return today's date.");
+        }
 
-    try {
+        setToday(data.today);
+        setSelectedDate((current) => current || data.today);
 
-      const response = await fetch("/api/tasks", {
+        if (typeof data.timeZone === "string") {
+          setTimeZone(data.timeZone);
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return;
 
-        cache: "no-store",
-
-      });
-
-      const data = await readJson<{ tasks: Task[] } & ApiError>(response);
-
-      if (!response.ok) {
-
-        throw new Error(data.message || "Failed to load tasks.");
-
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to initialize the tasks page.",
+        );
+        setLoading(false);
       }
-
-      if (!Array.isArray(data.tasks)) {
-
-        throw new Error("Invalid response received from the server.");
-
-      }
-
-      setTasks(data.tasks);
-
-    } catch (err) {
-
-      setError(
-
-        err instanceof Error ? err.message : "Something went wrong."
-
-      );
-
-    } finally {
-
-      if (showLoading) setLoading(false);
-
     }
 
-  }, []);
+    void initialize();
 
-  const loadCategories = useCallback(async () => {
-
-    try {
-
-      const response = await fetch("/api/categories", {
-
-        cache: "no-store",
-
-      });
-
-      const data = await readJson<{ categories: Category[] } & ApiError>(
-
-        response
-
-      );
-
-      if (!response.ok) {
-
-        throw new Error(data.message || "Failed to load categories.");
-
-      }
-
-      setCategories(
-
-        Array.isArray(data.categories) ? data.categories : []
-
-      );
-
-    } catch (err) {
-
-      setError(
-
-        err instanceof Error ? err.message : "Failed to load categories."
-
-      );
-
-    }
-
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
+    if (!selectedDate) return;
 
-  let cancelled = false;
+    const controller = new AbortController();
 
+    async function loadData() {
+      setLoading(true);
+      setError("");
 
+      try {
+        const params = new URLSearchParams({ view });
 
-  async function initialize() {
-
-    await Promise.all([
-
-      loadTasks(),
-
-      loadCategories(),
-
-    ]);
-
-  }
-
-
-
-  void initialize();
-
-
-
-  return () => {
-
-    cancelled = true;
-
-  };
-
-}, [loadTasks, loadCategories]);
-
-  function updateForm(field: keyof TaskForm, value: string) {
-
-    setForm((current) => ({ ...current, [field]: value }));
-
-  }
-
-  function resetForm() {
-
-    setForm(initialForm);
-
-    setEditingId(null);
-
-  }
-
-  function startEditing(task: Task) {
-
-    setForm({
-
-      title: task.title,
-
-      description: task.description ?? "",
-
-      status: task.status,
-
-      priority: task.priority,
-
-      dueDate: dateInputValue(task.dueDate),
-
-      categoryId: task.categoryId ?? task.category?.id ?? "",
-
-    });
-
-    setEditingId(task.id);
-
-    setError("");
-
-    setSuccess("");
-
-    document.getElementById("task-form")?.scrollIntoView({
-
-      behavior: "smooth",
-
-      block: "start",
-
-    });
-
-  }
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-
-    event.preventDefault();
-
-    setError("");
-
-    setSuccess("");
-
-    const title = form.title.trim();
-
-    const description = form.description.trim();
-
-    if (!title) {
-
-      setError("Task title is required.");
-
-      return;
-
-    }
-
-    if (title.length > 200) {
-
-      setError("Task title must not exceed 200 characters.");
-
-      return;
-
-    }
-
-    if (description.length > 5000) {
-
-      setError("Description must not exceed 5000 characters.");
-
-      return;
-
-    }
-
-    setSubmitting(true);
-
-    try {
-
-      const payload = {
-
-        title,
-
-        description: description || null,
-
-        status: form.status,
-
-        priority: form.priority,
-
-        dueDate: form.dueDate
-
-          ? new Date(`${form.dueDate}T12:00:00`).toISOString()
-
-          : null,
-
-        categoryId: form.categoryId || null,
-
-      };
-
-      const response = await fetch(
-
-        editingId ? `/api/tasks/${editingId}` : "/api/tasks",
-
-        {
-
-          method: editingId ? "PATCH" : "POST",
-
-          headers: { "Content-Type": "application/json" },
-
-          body: JSON.stringify(payload),
-
+        if (view === "day" || view === "completed") {
+          params.set("date", selectedDate);
         }
 
-      );
+        const statsUrl =
+          `/api/tasks/stats?date=${encodeURIComponent(selectedDate)}`;
 
-      const data = await readJson<{ task?: Task; message?: string } & ApiError>(
+        const [tasksResponse, statsResponse] = await Promise.all([
+          fetch(`/api/tasks?${params.toString()}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+          fetch(statsUrl, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        ]);
 
-        response
+        const [tasksData, statsData] = await Promise.all([
+          readJson(tasksResponse),
+          readJson(statsResponse),
+        ]);
 
-      );
+        if (!Array.isArray(tasksData.tasks)) {
+          throw new Error("The tasks API returned an invalid response.");
+        }
 
-      if (!response.ok) {
+        setTasks(tasksData.tasks);
+        setStats(statsData);
+        const habitsResponse = await fetch("/api/habits", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
 
-        throw new Error(
+        const habitsData = await readJson(habitsResponse);
 
-          data.message ||
-
-            (editingId ? "Failed to update task." : "Failed to create task.")
-
+        setHabits(
+          (Array.isArray(habitsData)
+            ? habitsData
+            : habitsData.habits ?? []
+          ).filter((habit: Habit) => habit.isActive),
         );
 
+        if (typeof tasksData.today === "string") {
+          setToday(tasksData.today);
+        }
+
+        if (typeof tasksData.timeZone === "string") {
+          setTimeZone(tasksData.timeZone);
+        } else if (typeof statsData.timeZone === "string") {
+          setTimeZone(statsData.timeZone);
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return;
+
+        setError(
+          err instanceof Error ? err.message : "Failed to load tasks.",
+        );
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
       }
-
-      if (!data.task?.id) {
-
-        throw new Error("The server returned an invalid task.");
-
-      }
-
-      setTasks((current) => [
-
-        data.task!,
-
-        ...current.filter((task) => task.id !== data.task!.id),
-
-      ]);
-
-      setSuccess(
-
-        editingId ? "Task updated successfully." : "Task created successfully."
-
-      );
-
-      resetForm();
-
-      await loadCategories();
-
-    } catch (err) {
-
-      setError(
-
-        err instanceof Error ? err.message : "Something went wrong."
-
-      );
-
-    } finally {
-
-      setSubmitting(false);
-
     }
 
-  }
+    void loadData();
 
-  async function handleDelete(task: Task) {
+    return () => controller.abort();
+  }, [selectedDate, view, refreshKey]);
 
-    const confirmed = window.confirm(
+  useEffect(() => {
+    async function handleDayChange() {
+      try {
+        const response = await fetch("/api/tasks?view=day", {
+          cache: "no-store",
+        });
 
-      `Delete "${task.title}"? This action cannot be undone.`
+        const data = await readJson(response);
 
-    );
+        if (typeof data.today !== "string") return;
 
-    if (!confirmed) return;
+        setToday(data.today);
+        setSelectedDate(data.today);
+        setView("day");
+        setRefreshKey((value) => value + 1);
 
-    setError("");
-
-    setSuccess("");
-
-    setDeletingId(task.id);
-
-    try {
-
-      const response = await fetch(`/api/tasks/${task.id}`, {
-
-        method: "DELETE",
-
-      });
-
-      const data = await readJson<{ message?: string } & ApiError>(response);
-
-      if (!response.ok) {
-
-        throw new Error(data.message || "Failed to delete task.");
-
+        if (typeof data.timeZone === "string") {
+          setTimeZone(data.timeZone);
+        }
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to refresh the current day.",
+        );
       }
-
-      setTasks((current) =>
-
-        current.filter((item) => item.id !== task.id)
-
-      );
-
-      if (editingId === task.id) resetForm();
-
-      setSuccess("Task deleted successfully.");
-
-    } catch (err) {
-
-      setError(
-
-        err instanceof Error ? err.message : "Something went wrong."
-
-      );
-
-    } finally {
-
-      setDeletingId(null);
-
     }
 
-  }
+    window.addEventListener("tasks:day-changed", handleDayChange);
 
-  async function handleStatusChange(task: Task, status: TaskStatus) {
+    return () => {
+      window.removeEventListener("tasks:day-changed", handleDayChange);
+    };
+  }, []);
 
-    if (task.status === status) return;
-
-    setError("");
-
-    setSuccess("");
-
-    try {
-
-      const response = await fetch(`/api/tasks/${task.id}`, {
-
-        method: "PATCH",
-
+  
+  const addTask = useCallback(
+    async (
+      title: string,
+      date: string,
+      startTime?: string,
+      endTime?: string,
+    ) => {
+      const response = await fetch("/api/tasks", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-
-        body: JSON.stringify({ status }),
-
+        body: JSON.stringify({
+          title: title.trim(),
+          scheduledDate: date,
+          startTime: startTime || null,
+          endTime: endTime || null,
+        }),
       });
 
-      const data = await readJson<{ task?: Task; message?: string } & ApiError>(
-
-        response
-
-      );
-
-      if (!response.ok) {
-
-        throw new Error(data.message || "Failed to update task status.");
-
-      }
-
-      if (data.task) {
-
-        setTasks((current) =>
-
-          current.map((item) =>
-
-            item.id === task.id ? data.task! : item
-
-          )
-
-        );
-
-      } else {
-
-        await loadTasks(false);
-
-      }
-
-      setSuccess("Task status updated.");
-
-    } catch (err) {
-
-      setError(
-
-        err instanceof Error ? err.message : "Something went wrong."
-
-      );
-
-      await loadTasks(false);
-
-    }
-
-  }
-
-  async function handleBoardStatusChange(
-
-    taskId: string,
-
-    status: TaskStatus
-
-  ) {
-
-    const task = tasks.find((item) => item.id === taskId);
-
-    if (!task || task.status === status) return;
-
-    await handleStatusChange(task, status);
-
-  }
-
-
-
-  const visibleTasks = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    const filtered = tasks.filter((task) => {
-      const matchesStatus = filter === "ALL" || task.status === filter;
-      const matchesSearch =
-        !query ||
-        task.title.toLowerCase().includes(query) ||
-        (task.description ?? "").toLowerCase().includes(query);
-      const matchesCategory =
-        !selectedCategoryId ||
-        task.categoryId === selectedCategoryId ||
-        task.category?.id === selectedCategoryId;
-      return matchesStatus && matchesSearch && matchesCategory;
-    });
-
-    const priorityRank: Record<TaskPriority, number> = {
-      LOW: 1,
-      MEDIUM: 2,
-      HIGH: 3,
-    };
-    const statusRank: Record<TaskStatus, number> = {
-      TODO: 1,
-      IN_PROGRESS: 2,
-      DONE: 3,
-    };
-
-    return [...filtered].sort((a, b) => {
-      let comparison = 0;
-      switch (sortField) {
-        case "title":
-          comparison = a.title.localeCompare(b.title);
-          break;
-        case "priority":
-          comparison = priorityRank[a.priority] - priorityRank[b.priority];
-          break;
-        case "status":
-          comparison = statusRank[a.status] - statusRank[b.status];
-          break;
-        case "dueDate":
-          if (!a.dueDate && !b.dueDate) return 0;
-          if (!a.dueDate) return 1;
-          if (!b.dueDate) return -1;
-          comparison = new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
-          break;
-        case "createdAt":
-          comparison = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-          break;
-      }
-      return comparison * (sortOrder === "asc" ? 1 : -1);
-    });
-  }, [tasks, filter, search, selectedCategoryId, sortField, sortOrder]);
-
-  const counts = {
-
-    total: tasks.length,
-
-    todo: tasks.filter((task) => task.status === "TODO").length,
-
-    inProgress: tasks.filter((task) => task.status === "IN_PROGRESS").length,
-
-    done: tasks.filter((task) => task.status === "DONE").length,
-
-  };
-
-  return (
-
-    <div className="mx-auto max-w-7xl space-y-8">
-
-      <header>
-
-        <p className="text-sm font-medium tracking-widest text-violet-400">
-
-          YOUR PERSONAL WORKSPACE
-
-        </p>
-
-        <h1 className="mt-3 text-3xl font-bold text-white sm:text-4xl">
-
-          Tasks
-
-        </h1>
-
-        <p className="mt-3 text-slate-400">
-
-          Plan your work, prioritize what matters, and track your progress.
-
-        </p>
-
-      </header>
-
-      {error && (
-
-        <div
-
-          role="alert"
-
-          className="rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-300"
-
-        >
-
-          {error}
-
-        </div>
-
-      )}
-
-      {success && (
-
-        <div
-
-          role="status"
-
-          className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-300"
-
-        >
-
-          {success}
-
-        </div>
-
-      )}
-
-      <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-
-        {[
-
-          { label: "Total Tasks", value: counts.total },
-
-          { label: "To Do", value: counts.todo },
-
-          { label: "In Progress", value: counts.inProgress },
-
-          { label: "Completed", value: counts.done },
-
-        ].map((item) => (
-
-          <article
-
-            key={item.label}
-
-            className="rounded-2xl border border-white/10 bg-white/[0.03] p-5"
-
-          >
-
-            <p className="text-sm text-slate-400">{item.label}</p>
-
-            <p className="mt-4 text-3xl font-bold text-white">
-
-              {item.value}
-
-            </p>
-
-          </article>
-
-        ))}
-
-      </section>
-
-      <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-
-        <div className="space-y-6 xl:col-span-1">
-
-          <article
-
-            id="task-form"
-
-            className="scroll-mt-6 rounded-2xl border border-white/10 bg-white/[0.03] p-6"
-
-          >
-
-            <h2 className="text-xl font-semibold text-white">
-
-              {editingId ? "Edit Task" : "Create a Task"}
-
-            </h2>
-
-            <p className="mt-2 text-sm text-slate-400">
-
-              {editingId
-
-                ? "Update your task details."
-
-                : "Add a new task to your workspace."}
-
-            </p>
-
-            <form onSubmit={handleSubmit} className="mt-6 space-y-5">
-
-              <div>
-
-                <label
-
-                  htmlFor="task-title"
-
-                  className="mb-2 block text-sm font-medium text-slate-300"
-
-                >
-
-                  Title \*
-
-                </label>
-
-                <input
-
-                  id="task-title"
-
-                  value={form.title}
-
-                  onChange={(event) =>
-
-                    updateForm("title", event.target.value)
-
-                  }
-
-                  maxLength={200}
-
-                  required
-
-                  placeholder="e.g. Learn Next.js"
-
-                  className="w-full rounded-xl border border-white/10 bg-[#0D1325] px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-violet-500"
-
-                />
-
-              </div>
-
-              <div>
-
-                <label
-
-                  htmlFor="task-description"
-
-                  className="mb-2 block text-sm font-medium text-slate-300"
-
-                >
-
-                  Description
-
-                </label>
-
-                <textarea
-
-                  id="task-description"
-
-                  value={form.description}
-
-                  onChange={(event) =>
-
-                    updateForm("description", event.target.value)
-
-                  }
-
-                  maxLength={5000}
-
-                  rows={3}
-
-                  placeholder="Add some details..."
-
-                  className="w-full resize-y rounded-xl border border-white/10 bg-[#0D1325] px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-violet-500"
-
-                />
-
-              </div>
-
-              <div>
-
-                <label
-
-                  htmlFor="task-status"
-
-                  className="mb-2 block text-sm font-medium text-slate-300"
-
-                >
-
-                  Status
-
-                </label>
-
-                <select
-
-                  id="task-status"
-
-                  value={form.status}
-
-                  onChange={(event) =>
-
-                    updateForm("status", event.target.value)
-
-                  }
-
-                  className="w-full rounded-xl border border-white/10 bg-[#0D1325] px-4 py-3 text-white outline-none focus:border-violet-500"
-
-                >
-
-                  <option value="TODO">To Do</option>
-
-                  <option value="IN_PROGRESS">In Progress</option>
-
-                  <option value="DONE">Done</option>
-
-                </select>
-
-              </div>
-
-              <div>
-
-                <label
-
-                  htmlFor="task-priority"
-
-                  className="mb-2 block text-sm font-medium text-slate-300"
-
-                >
-
-                  Priority
-
-                </label>
-
-                <select
-
-                  id="task-priority"
-
-                  value={form.priority}
-
-                  onChange={(event) =>
-
-                    updateForm("priority", event.target.value)
-
-                  }
-
-                  className="w-full rounded-xl border border-white/10 bg-[#0D1325] px-4 py-3 text-white outline-none focus:border-violet-500"
-
-                >
-
-                  <option value="LOW">Low</option>
-
-                  <option value="MEDIUM">Medium</option>
-
-                  <option value="HIGH">High</option>
-
-                </select>
-
-              </div>
-
-              <div>
-
-                <label
-
-                  htmlFor="task-due-date"
-
-                  className="mb-2 block text-sm font-medium text-slate-300"
-
-                >
-
-                  Due Date
-
-                </label>
-
-                <input
-
-                  id="task-due-date"
-
-                  type="date"
-
-                  value={form.dueDate}
-
-                  onChange={(event) =>
-
-                    updateForm("dueDate", event.target.value)
-
-                  }
-
-                  className="w-full rounded-xl border border-white/10 bg-[#0D1325] px-4 py-3 text-white outline-none focus:border-violet-500"
-
-                />
-
-              </div>
-
-              <div>
-
-                <label
-
-                  htmlFor="task-category"
-
-                  className="mb-2 block text-sm font-medium text-slate-300"
-
-                >
-
-                  Category
-
-                </label>
-
-                <select
-
-                  id="task-category"
-
-                  value={form.categoryId}
-
-                  onChange={(event) =>
-
-                    updateForm("categoryId", event.target.value)
-
-                  }
-
-                  className="w-full rounded-xl border border-white/10 bg-[#0D1325] px-4 py-3 text-white outline-none focus:border-violet-500"
-
-                >
-
-                  <option value="">No Category</option>
-
-                  {categories.map((category) => (
-
-                    <option key={category.id} value={category.id}>
-
-                      {category.name}
-
-                    </option>
-
-                  ))}
-
-                </select>
-
-              </div>
-
-              <button
-
-                type="submit"
-
-                disabled={submitting}
-
-                className="w-full rounded-xl bg-violet-600 px-4 py-3 font-semibold text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
-
-              >
-
-                {submitting
-
-                  ? "Saving..."
-
-                  : editingId
-
-                    ? "Save Changes"
-
-                    : "Create Task"}
-
-              </button>
-
-              {editingId && (
-
-                <button
-
-                  type="button"
-
-                  onClick={resetForm}
-
-                  disabled={submitting}
-
-                  className="w-full rounded-xl border border-white/10 px-4 py-3 font-medium text-slate-300 transition hover:bg-white/5"
-
-                >
-
-                  Cancel Editing
-
-                </button>
-
-              )}
-
-            </form>
-
-          </article>
-
-          <CategoryManager
-
-            selectedCategoryId={selectedCategoryId}
-
-            onSelect={(categoryId) => {
-
-              setSelectedCategoryId(categoryId);
-
-              setForm((current) => ({
-
-                ...current,
-
-                categoryId,
-
-              }));
-
-            }}
-
-          />
-
-        </div>
-
-        <article className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 xl:col-span-2">
-
-          <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-
-            <div>
-
-              <h2 className="text-xl font-semibold text-white">
-
-                Your Tasks
-
-              </h2>
-
-              <p className="mt-2 text-sm text-slate-400">
-
-                Search, filter, edit, and organize your tasks.
-
-              </p>
-
-            </div>
-
-            <button
-
-              type="button"
-
-              onClick={() => {
-
-                void loadTasks();
-
-                void loadCategories();
-
-              }}
-
-              disabled={loading}
-
-              className="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5 disabled:opacity-50"
-
-            >
-
-              Refresh
-
-            </button>
-
-          </div>
-
-          <div className="mt-6">
-
-            <label htmlFor="task-search" className="sr-only">
-
-              Search tasks
-
-            </label>
-
-            <input
-
-              id="task-search"
-
-              type="search"
-
-              value={search}
-
-              onChange={(event) => setSearch(event.target.value)}
-
-              placeholder="Search by title or description..."
-
-              className="w-full rounded-xl border border-white/10 bg-[#0D1325] px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-violet-500"
-
-            />
-
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-
-            {(["ALL", "TODO", "IN_PROGRESS", "DONE"] as const).map(
-
-              (value) => (
-
-                <button
-
-                  key={value}
-
-                  type="button"
-
-                  onClick={() => setFilter(value)}
-
-                  aria-pressed={filter === value}
-
-                  className={`rounded-lg px-3 py-2 text-sm transition ${
-
-                    filter === value
-
-                      ? "bg-violet-600 text-white"
-
-                      : "bg-white/5 text-slate-400 hover:text-white"
-
-                  }`}
-
-                >
-
-                  {value === "ALL" ? "All" : statusLabels[value]}
-
-                </button>
-
-              )
-
-            )}
-
-          </div>
-
-          <div className="mt-3 flex flex-wrap gap-2">
-
-            <button
-
-              type="button"
-
-              onClick={() => setSelectedCategoryId("")}
-
-              className={`rounded-lg px-3 py-2 text-xs transition ${
-
-                !selectedCategoryId
-
-                  ? "bg-violet-500/15 text-violet-300"
-
-                  : "bg-white/5 text-slate-400 hover:text-white"
-
-              }`}
-
-            >
-
-              All Categories
-
-            </button>
-
-            {categories.map((category) => (
-
-              <button
-
-                key={category.id}
-
-                type="button"
-
-                onClick={() => setSelectedCategoryId(category.id)}
-
-                className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs transition ${
-
-                  selectedCategoryId === category.id
-
-                    ? "bg-violet-500/15 text-violet-300"
-
-                    : "bg-white/5 text-slate-400 hover:text-white"
-
-                }`}
-
-              >
-
-                <span
-
-                  className="h-2 w-2 rounded-full"
-
-                  style={{ backgroundColor: category.color || "#8B5CF6" }}
-
-                />
-
-                {category.name}
-
-              </button>
-
-            ))}
-
-          </div>
-
-          <div className="mt-6">
-            <TaskSort
-              field={sortField}
-              order={sortOrder}
-              onFieldChange={setSortField}
-              onOrderChange={setSortOrder}
-            />
-          </div>
-
-          <div className="mt-6 flex items-center justify-between gap-3">
-
-            <h3 className="font-medium text-white">View</h3>
-
-            <div className="flex rounded-xl border border-white/10 bg-[#0D1325] p-1">
-
-              <button
-
-                type="button"
-
-                onClick={() => setViewMode("LIST")}
-
-                aria-pressed={viewMode === "LIST"}
-
-                className={`rounded-lg px-4 py-2 text-sm transition ${
-
-                  viewMode === "LIST"
-
-                    ? "bg-violet-600 text-white"
-
-                    : "text-slate-400 hover:text-white"
-
-                }`}
-
-              >
-
-                List
-
-              </button>
-
-              <button
-
-                type="button"
-
-                onClick={() => setViewMode("KANBAN")}
-
-                aria-pressed={viewMode === "KANBAN"}
-
-                className={`rounded-lg px-4 py-2 text-sm transition ${
-
-                  viewMode === "KANBAN"
-
-                    ? "bg-violet-600 text-white"
-
-                    : "text-slate-400 hover:text-white"
-
-                }`}
-
-              >
-
-                Kanban
-
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode("CALENDAR")}
-                aria-pressed={viewMode === "CALENDAR"}
-                className={`rounded-lg px-4 py-2 text-sm transition ${
-                  viewMode === "CALENDAR"
-                    ? "bg-violet-600 text-white"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                Calendar
-              </button>
-
-            </div>
-
-          </div>
-
-          <div className="mt-4">
-
-            {loading ? (
-
-              <div className="py-12 text-center text-slate-400">
-
-                Loading tasks...
-
-              </div>
-
-            ) : visibleTasks.length === 0 ? (
-
-              <div className="rounded-xl border border-dashed border-white/10 px-4 py-12 text-center">
-
-                <div className="text-3xl text-slate-500">✓</div>
-
-                <p className="mt-3 font-medium text-white">
-
-                  {tasks.length === 0
-
-                    ? "No tasks yet"
-
-                    : "No tasks match your filters"}
-
-                </p>
-
-                <p className="mt-2 text-sm text-slate-400">
-
-                  {tasks.length === 0
-
-                    ? "Create your first task using the form."
-
-                    : "Try another search term, status, or category."}
-
-                </p>
-
-              </div>
-
-            ) : viewMode === "CALENDAR" ? (
-              <TaskCalendar
-                tasks={visibleTasks}
-                onTaskClick={(calendarTask) => {
-                  const task = tasks.find((item) => item.id === calendarTask.id);
-                  if (task) startEditing(task);
-                }}
-              />
-            ) : viewMode === "KANBAN" ? (
-
-              <TaskBoard
-
-                tasks={visibleTasks as BoardTask[]}
-
-                onStatusChange={handleBoardStatusChange}
-
-                onEdit={(boardTask) => {
-
-                  const task = tasks.find((item) => item.id === boardTask.id);
-
-                  if (task) startEditing(task);
-
-                }}
-
-                onDelete={(boardTask) => {
-
-                  const task = tasks.find((item) => item.id === boardTask.id);
-
-                  if (task) void handleDelete(task);
-
-                }}
-
-              />
-
-            ) : (
-
-              <div className="space-y-3">
-
-              {visibleTasks.map((task) => {
-
-                const taskCategory =
-
-                  task.category ??
-
-                  categories.find(
-
-                    (category) => category.id === task.categoryId
-
-                  );
-
-                return (
-
-                  <div
-
-                    key={task.id}
-
-                    className="rounded-xl border border-white/10 bg-[#0D1325]/70 p-4"
-
-                  >
-
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-
-                      <div className="min-w-0 flex-1">
-
-                        <h3
-
-                          className={`break-words font-semibold ${
-
-                            task.status === "DONE"
-
-                              ? "text-slate-500 line-through"
-
-                              : "text-white"
-
-                          }`}
-
-                        >
-
-                          {task.title}
-
-                        </h3>
-
-                        {task.description && (
-
-                          <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-400">
-
-                            {task.description}
-
-                          </p>
-
-                        )}
-
-                      </div>
-
-                      <span
-
-                        className={`w-fit shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium ${priorityColors[task.priority]}`}
-
-                      >
-
-                        {task.priority}
-
-                      </span>
-
-                    </div>
-
-                    {taskCategory && (
-
-                      <div className="mt-3">
-
-                        <span className="inline-flex items-center gap-2 rounded-lg bg-white/5 px-2.5 py-1.5 text-xs text-slate-300">
-
-                          <span
-
-                            className="h-2 w-2 rounded-full"
-
-                            style={{
-
-                              backgroundColor:
-
-                                taskCategory.color || "#8B5CF6",
-
-                            }}
-
-                          />
-
-                          {taskCategory.name}
-
-                        </span>
-
-                      </div>
-
-                    )}
-
-                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-
-                      <div>
-
-                        <label
-
-                          htmlFor={`status-${task.id}`}
-
-                          className="mb-1.5 block text-xs text-slate-500"
-
-                        >
-
-                          Status
-
-                        </label>
-
-                        <select
-
-                          id={`status-${task.id}`}
-
-                          value={task.status}
-
-                          onChange={(event) =>
-
-                            void handleStatusChange(
-
-                              task,
-
-                              event.target.value as TaskStatus
-
-                            )
-
-                          }
-
-                          className="w-full rounded-lg border border-white/10 bg-[#0D1325] px-3 py-2 text-sm text-slate-300 outline-none focus:border-violet-500"
-
-                        >
-
-                          <option value="TODO">To Do</option>
-
-                          <option value="IN_PROGRESS">In Progress</option>
-
-                          <option value="DONE">Done</option>
-
-                        </select>
-
-                      </div>
-
-                      <div>
-
-                        <p className="mb-1.5 text-xs text-slate-500">
-
-                          Due Date
-
-                        </p>
-
-                        <p className="rounded-lg bg-white/5 px-3 py-2 text-sm text-slate-300">
-
-                          {formatDate(task.dueDate)}
-
-                        </p>
-
-                      </div>
-
-                    </div>
-
-                    <SubtaskList taskId={task.id} />
-
-                    <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/5 pt-4">
-
-                      <span className="mr-auto text-xs text-slate-500">
-
-                        Created {formatDate(task.createdAt)}
-
-                      </span>
-
-                      <button
-
-                        type="button"
-
-                        onClick={() => startEditing(task)}
-
-                        className="rounded-lg border border-violet-500/20 px-3 py-2 text-sm font-medium text-violet-300 transition hover:bg-violet-500/10"
-
-                      >
-
-                        Edit
-
-                      </button>
-
-                      <button
-
-                        type="button"
-
-                        onClick={() => void handleDelete(task)}
-
-                        disabled={deletingId === task.id}
-
-                        className="rounded-lg border border-red-500/20 px-3 py-2 text-sm font-medium text-red-300 transition hover:bg-red-500/10 disabled:opacity-50"
-
-                      >
-
-                        {deletingId === task.id ? "Deleting..." : "Delete"}
-
-                      </button>
-
-                    </div>
-
-                  </div>
-
-                );
-
-              })}
-
-              </div>
-
-            )}
-
-          </div>
-
-          {!loading && visibleTasks.length > 0 && (
-
-            <p className="mt-4 text-xs text-slate-500">
-
-              Showing {visibleTasks.length} of {tasks.length} tasks
-
-            </p>
-
-          )}
-
-        </article>
-
-      </section>
-
-    </div>
-
+      await readJson(response);
+
+      setError("");
+      setSelectedDate(date);
+      setView("day");
+      setRefreshKey((value) => value + 1);
+    },
+    [],
   );
 
+  const handleAddTask = useCallback(
+    async (
+      title: string,
+      date: string,
+      startTime?: string,
+      endTime?: string,
+    ) => {
+      await addTask(title, date, startTime, endTime);
+      setIsAddTaskOpen(false);
+    },
+    [addTask],
+  );
+
+
+  useEffect(() => {
+    if (!isAddTaskOpen) return;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsAddTaskOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isAddTaskOpen]);
+
+  const headingByView: Record<TaskView, string> = {
+    day: "Today's tasks",
+    upcoming: "Upcoming tasks",
+    missed: "Missed tasks",
+    completed: "Completed tasks",
+  };
+
+  const completionRate = Math.min(
+    100,
+    Math.max(0, stats?.completionRate ?? 0),
+  );
+  
+
+  const performTaskAction = useCallback(
+    async (taskId: string, action: "complete" | "delete") => {
+      setError("");
+
+      try {
+        const response = await fetch("/api/tasks/actions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ taskId, action }),
+        });
+
+        await readJson(response);
+
+        setRefreshKey((value) => value + 1);
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to perform task action.",
+        );
+      }
+    },
+    [],
+  );
+
+
+
+  return (
+    <main className="relative min-h-screen overflow-hidden bg-[#080D1B] px-3 py-5 text-slate-200 sm:px-6 sm:py-7 lg:px-8">
+      {/* Background glow */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed -left-40 -top-40 h-[28rem] w-[28rem] rounded-full bg-violet-600/[0.09] blur-[130px]"
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed -right-40 top-1/3 h-[28rem] w-[28rem] rounded-full bg-indigo-500/[0.07] blur-[140px]"
+      />
+
+      <div className="relative mx-auto w-full max-w-[1400px]">
+        {/* Header */}
+        <header className="mb-6 flex items-center justify-between gap-4 border-b border-white/[0.07] pb-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-400/[0.09] text-violet-300">
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                className="h-5 w-5"
+              >
+                <path
+                  d="M8 5H6.5A2.5 2.5 0 0 0 4 7.5v11A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5v-11A2.5 2.5 0 0 0 17.5 5H16M8 3h8v4H8V3Z"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="m8 13 2.2 2.2L16 9.5"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </div>
+            <div>
+              <h1 className="text-xl font-bold tracking-tight text-white sm:text-2xl">
+                My Tasks
+              </h1>
+              <p className="mt-0.5 hidden text-xs text-slate-500 sm:block">
+                Plan your day. Focus on what matters.
+              </p>
+            </div>
+          </div>
+
+          {selectedDate && (
+            <p className="hidden text-sm text-slate-400 md:block">
+              {formatDate(selectedDate)}
+            </p>
+          )}
+        </header>
+
+        {/* Main layout */}
+        <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[minmax(0,1fr)_300px]">
+          {/* Tasks column */}
+          <div className="mx-auto w-full min-w-0 max-w-4xl space-y-5">
+            <section className="rounded-2xl border border-white/[0.09] bg-white/[0.035] p-3 shadow-xl shadow-black/10 backdrop-blur-2xl sm:rounded-3xl sm:p-5 lg:p-6">
+              {/* List header */}
+              <div className="mb-5 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="text-xl font-bold tracking-tight text-white sm:text-2xl">
+                    {headingByView[view]}
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-500 sm:text-sm">
+                    {selectedDate
+                      ? formatDate(selectedDate)
+                      : "Loading date..."}
+                  </p>
+                </div>
+
+                <span className="shrink-0 rounded-xl border border-violet-400/15 bg-violet-400/[0.07] px-3 py-2 text-xs font-medium text-violet-200">
+                  {tasks.length} {tasks.length === 1 ? "task" : "tasks"}
+                </span>
+              </div>
+
+              {/* Add task button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setError("");
+                  setIsAddTaskOpen(true);
+                }}
+                className="group relative mb-4 flex w-full items-center justify-center gap-2.5 overflow-hidden rounded-2xl border border-violet-400/25 bg-gradient-to-r from-violet-600/90 via-violet-500 to-indigo-500 px-4 py-3.5 text-sm font-semibold text-white shadow-[0_8px_24px_-8px_rgba(139,92,246,0.55)] transition-all duration-300 hover:-translate-y-0.5 hover:border-violet-300/50 hover:shadow-[0_12px_32px_-8px_rgba(139,92,246,0.65)] active:translate-y-0 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#080D1B] motion-reduce:transform-none"
+              >
+                
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/15 to-transparent transition-transform duration-700 group-hover:translate-x-full"
+                />
+                
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  className="relative h-5 w-5 transition-transform duration-300 group-hover:rotate-90"                >
+                  <path
+                    d="M12 5v14M5 12h14"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                Add a new task
+              </button>
+              
+
+              {/* Filters */}
+              <div className="mb-4 overflow-x-auto pb-1">
+                <TaskFilters view={view} onChange={setView} />
+              </div>
+
+              {/* Error message */}
+              {error && (
+                <div
+                  role="alert"
+                  className="mb-4 flex flex-col gap-3 rounded-xl border border-red-400/15 bg-red-400/[0.06] px-4 py-3 text-sm text-red-300 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <p>{error}</p>
+                  <button
+                    type="button"
+                    onClick={() => setRefreshKey((value) => value + 1)}
+                    className="w-fit rounded-lg border border-red-300/15 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-red-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+                  >
+                    Try again
+                  </button>
+                </div>
+              )}
+
+              {/* Task list */}
+              <TaskList
+                tasks={tasks}
+                loading={loading}
+                selectedView={view}
+                onComplete={(taskId) =>
+                  performTaskAction(taskId, "complete")
+                }
+                onDelete={(taskId) =>
+                  performTaskAction(taskId, "delete")
+                }
+              />
+
+                {view === "day" && (
+                  <section className="mt-6 border-t border-white/[0.07] pt-5">
+                    <div className="mb-4 flex items-center justify-between">
+                      <h3 className="text-base font-semibold text-white">
+                        Daily Habits
+                      </h3>
+                
+                      <span className="text-xs text-slate-500">
+                        {
+                          habits.filter((habit) =>
+                            habit.recurrence.days.includes(
+                              new Date(`${selectedDate}T12:00:00Z`).getUTCDay(),
+                            ),
+                          ).length
+                        } habits
+                      </span>
+                    </div>
+                    
+                    <div className="space-y-3">
+                      {habits
+                        .filter((habit) =>
+                          habit.recurrence.days.includes(
+                            new Date(`${selectedDate}T12:00:00Z`).getUTCDay(),
+                          ),
+                        )
+                        .map((habit) => (
+                          <div
+                            key={habit.id}
+                            className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.07] bg-white/[0.025] p-3"
+                          >
+                            <p className="text-sm text-slate-200">
+                              {habit.title}
+                            </p>
+                        
+                            <HabitStatus
+                              habitId={habit.id}
+                              date={selectedDate}
+                              onChange={() =>
+                                setRefreshKey((value) => value + 1)
+                              }
+                            />
+                          </div>
+                        ))}
+
+                      {habits.filter((habit) =>
+                        habit.recurrence.days.includes(
+                          new Date(`${selectedDate}T12:00:00Z`).getUTCDay(),
+                        ),
+                      ).length === 0 && (
+                        <p className="text-sm text-slate-500">
+                          No habits scheduled for this day.
+                        </p>
+                      )}
+                    </div>
+                  </section>
+                )}
+            </section>
+
+            {/* Completion and statistics */}
+            <section className="rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4 backdrop-blur-xl sm:p-5">
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-100">
+                    Completion progress
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Your progress for the selected day
+                  </p>
+                </div>
+                <p className="text-2xl font-bold tabular-nums text-violet-200">
+                  {completionRate}%
+                </p>
+              </div>
+
+              <div
+                className="h-2 overflow-hidden rounded-full bg-white/[0.07]"
+                role="progressbar"
+                aria-label="Task completion rate"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={completionRate}
+              >
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-400 transition-all duration-500"
+                  style={{ width: `${completionRate}%` }}
+                />
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Stat label="Total tasks" value={stats?.total ?? 0} />
+                <Stat
+                  label="Completed"
+                  value={stats?.completed ?? 0}
+                  accent
+                />
+                <Stat label="Pending" value={stats?.pending ?? 0} />
+                <Stat label="Missed" value={stats?.missed ?? 0} />
+              </div>
+            </section>
+            <DailyNote selectedDate={selectedDate} />
+
+          </div>
+
+
+          {/* Calendar and countdown */}
+          <aside className="order-first grid grid-cols-1 gap-4 sm:grid-cols-2 lg:order-none lg:grid-cols-1">
+            <section className="min-w-0 rounded-2xl border border-white/[0.09] bg-white/[0.04] p-3 shadow-lg shadow-black/10 backdrop-blur-2xl sm:p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-violet-400/15 bg-violet-400/[0.08] text-violet-300">
+                  <CalendarIcon />
+                </span>
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-100">
+                    Calendar
+                  </h2>
+                  <p className="text-xs text-slate-500">Choose a day</p>
+                </div>
+              </div>
+
+              <TaskCalendar
+                selectedDate={selectedDate}
+                today={today}
+                onSelectDate={(date) => {
+                  setSelectedDate(date);
+                  setView("day");
+                }}
+              />
+            </section>
+
+            <DayCountdown timeZone={timeZone} />
+          </aside>
+        </div>
+
+        <footer className="pt-6 text-center text-xs text-slate-600">
+          One step at a time.
+        </footer>
+      </div>
+
+      {/* Add task modal */}
+      {isAddTaskOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[#030611]/75 p-4 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setIsAddTaskOpen(false);
+            }
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-task-title"
+            className="relative my-auto w-full max-w-xl overflow-hidden rounded-3xl border border-violet-400/20 bg-[#0C1224] p-6 shadow-2xl shadow-black/40 sm:p-8"          >
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute -right-16 -top-16 h-40 w-40 rounded-full bg-violet-500/10 blur-3xl"
+            />
+
+            <div className="relative">
+              <div className="mb-5 flex items-center justify-between gap-3">
+                <div>
+                  <h2
+                    id="add-task-title"
+                    className="text-lg font-bold text-white"
+                  >
+                    Add a new task
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-400">
+                    What would you like to get done?
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  aria-label="Close"
+                  onClick={() => setIsAddTaskOpen(false)}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 text-slate-400 transition hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+                >
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    className="h-5 w-5"
+                  >
+                    <path
+                      d="m6 6 12 12M18 6 6 18"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+
+              <TaskForm
+                selectedDate={selectedDate}
+                onAdd={handleAddTask}
+              />
+            </div>
+          </section>
+        </div>
+      )}
+    </main>
+  );
 }

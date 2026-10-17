@@ -1,177 +1,152 @@
 
-import { NextRequest } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 
-type RouteContext = {
+type Context = {
   params: Promise<{ id: string }>;
 };
 
-function errorResponse(message: string, status: number) {
-  return Response.json({ message }, { status });
-}
-
-export async function PATCH(
-  request: NextRequest,
-  context: RouteContext
-) {
+export async function GET(_request: NextRequest, { params }: Context) {
   try {
     const user = await getCurrentUser();
 
-    if (!user) {
-      return errorResponse("You must be logged in.", 401);
+    if (!user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { id } = await context.params;
+    const { id } = await params;
 
-    let body: unknown;
+    const habit = await prisma.habit.findFirst({
+      where: { id, userId: user.id },
+      include: {
+        entries: {
+          orderBy: { date: "desc" },
+          take: 30,
+        },
+      },
+    });
 
-    try {
-      body = await request.json();
-    } catch {
-      return errorResponse("Invalid request body.", 400);
+    if (!habit) {
+      return NextResponse.json({ error: "Habit not found" }, { status: 404 });
     }
 
-    if (
-      typeof body !== "object" ||
-      body === null ||
-      Array.isArray(body)
-    ) {
-      return errorResponse("Invalid request data.", 400);
+    return NextResponse.json(habit);
+  } catch (error) {
+    console.error("GET /api/habits/[id]:", error);
+
+    return NextResponse.json(
+      { error: "Failed to fetch habit" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(request: NextRequest, { params }: Context) {
+  try {
+    const user = await getCurrentUser();
+
+    if (!user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const data = body as Record<string, unknown>;
+    const { id } = await params;
+    const body = await request.json();
 
-    const existingHabit = await prisma.habit.findFirst({
+    const existing = await prisma.habit.findFirst({
       where: { id, userId: user.id },
       select: { id: true },
     });
 
-    if (!existingHabit) {
-      return errorResponse("Habit not found.", 404);
+    if (!existing) {
+      return NextResponse.json({ error: "Habit not found" }, { status: 404 });
     }
 
-    const updateData: {
+    const data: {
       title?: string;
-      description?: string | null;
-      isActive?: boolean;
       recurrence?: object;
+      isActive?: boolean;
     } = {};
 
-    if (data.title !== undefined) {
+    if (body.title !== undefined) {
       if (
-        typeof data.title !== "string" ||
-        !data.title.trim() ||
-        data.title.trim().length > 150
+        typeof body.title !== "string" ||
+        !body.title.trim() ||
+        body.title.trim().length > 120
       ) {
-        return errorResponse("Invalid habit title.", 400);
+        return NextResponse.json({ error: "Invalid title" }, { status: 400 });
       }
 
-      updateData.title = data.title.trim();
+      data.title = body.title.trim();
     }
 
-    if (data.description !== undefined) {
+    if (body.recurrence !== undefined) {
       if (
-        data.description !== null &&
-        typeof data.description !== "string"
+        !body.recurrence ||
+        typeof body.recurrence !== "object" ||
+        Array.isArray(body.recurrence)
       ) {
-        return errorResponse("Invalid description.", 400);
+        return NextResponse.json(
+          { error: "Invalid recurrence" },
+          { status: 400 }
+        );
       }
 
-      updateData.description =
-        typeof data.description === "string"
-          ? data.description.trim() || null
-          : null;
+      data.recurrence = body.recurrence;
     }
 
-    if (data.isActive !== undefined) {
-      if (typeof data.isActive !== "boolean") {
-        return errorResponse("isActive must be a boolean.", 400);
+    if (body.isActive !== undefined) {
+      if (typeof body.isActive !== "boolean") {
+        return NextResponse.json(
+          { error: "isActive must be a boolean" },
+          { status: 400 }
+        );
       }
 
-      updateData.isActive = data.isActive;
-    }
-
-    if (data.recurrence !== undefined) {
-      if (
-        typeof data.recurrence !== "object" ||
-        data.recurrence === null ||
-        Array.isArray(data.recurrence)
-      ) {
-        return errorResponse("Invalid recurrence.", 400);
-      }
-
-      const recurrence = data.recurrence as Record<string, unknown>;
-
-      const validDaily = recurrence.frequency === "DAILY";
-
-      const validWeekly =
-        recurrence.frequency === "WEEKLY" &&
-        Array.isArray(recurrence.daysOfWeek) &&
-        recurrence.daysOfWeek.length > 0 &&
-        recurrence.daysOfWeek.every(
-          (day) =>
-            typeof day === "number" &&
-            Number.isInteger(day) &&
-            day >= 0 &&
-            day <= 6
-        ) &&
-        new Set(recurrence.daysOfWeek).size ===
-          recurrence.daysOfWeek.length;
-
-      if (!validDaily && !validWeekly) {
-        return errorResponse("Invalid recurrence settings.", 400);
-      }
-
-      updateData.recurrence = recurrence;
-    }
-
-    if (Object.keys(updateData).length === 0) {
-      return errorResponse("No valid fields to update.", 400);
+      data.isActive = body.isActive;
     }
 
     const habit = await prisma.habit.update({
       where: { id },
-      data: updateData,
-      include: { entries: true },
+      data,
     });
 
-    return Response.json({
-      message: "Habit updated successfully.",
-      habit,
-    });
+    return NextResponse.json(habit);
   } catch (error) {
-    console.error("Update habit failed:", error);
-    return errorResponse("Failed to update habit.", 500);
+    console.error("PATCH /api/habits/[id]:", error);
+
+    return NextResponse.json(
+      { error: "Failed to update habit" },
+      { status: 500 }
+    );
   }
 }
 
-export async function DELETE(
-  _request: NextRequest,
-  context: RouteContext
-) {
+export async function DELETE(_request: NextRequest, { params }: Context) {
   try {
     const user = await getCurrentUser();
 
-    if (!user) {
-      return errorResponse("You must be logged in.", 401);
+    if (!user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { id } = await context.params;
+    const { id } = await params;
 
     const result = await prisma.habit.deleteMany({
       where: { id, userId: user.id },
     });
 
     if (result.count === 0) {
-      return errorResponse("Habit not found.", 404);
+      return NextResponse.json({ error: "Habit not found" }, { status: 404 });
     }
 
-    return Response.json({
-      message: "Habit deleted successfully.",
-    });
+    return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Delete habit failed:", error);
-    return errorResponse("Failed to delete habit.", 500);
+    console.error("DELETE /api/habits/[id]:", error);
+
+    return NextResponse.json(
+      { error: "Failed to delete habit" },
+      { status: 500 }
+    );
   }
 }

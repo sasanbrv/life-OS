@@ -1,271 +1,205 @@
 
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
-import type { Prisma } from "@/app/generated/prisma/client";
 
-const allowedStatuses = ["TODO", "IN_PROGRESS", "DONE"] as const;
-const allowedPriorities = ["LOW", "MEDIUM", "HIGH"] as const;
+export const dynamic = "force-dynamic";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value)
+function parseDate(value: string | null): Date | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+
+  const date = new Date(`${value}T00:00:00.000Z`);
+
+  return !Number.isNaN(date.getTime()) &&
+    date.toISOString().slice(0, 10) === value
+    ? date
+    : null;
+}
+
+function getDateInTimeZone(timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const values = Object.fromEntries(
+    parts.map((part) => [part.type, part.value]),
   );
+
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
-function errorResponse(message: string, status: number) {
-  return Response.json({ message }, { status });
-}
+
 
 export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser();
 
     if (!user) {
-      return errorResponse("You must be logged in.", 401);
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const params = request.nextUrl.searchParams;
-    const search = params.get("search")?.trim();
-    const status = params.get("status");
-    const priority = params.get("priority");
-    const categoryId = params.get("categoryId");
-    const sort = params.get("sort") ?? "createdAt";
-    const order = params.get("order") === "asc" ? "asc" : "desc";
+    const view = params.get("view") ?? "day";
+    const dateString = params.get("date");
 
-    if (
-      status &&
-      status !== "ALL" &&
-      !allowedStatuses.includes(
-        status as (typeof allowedStatuses)[number]
-      )
-    ) {
-      return errorResponse("Invalid task status.", 400);
+    if (!["day", "missed", "upcoming", "completed"].includes(view)) {
+      return NextResponse.json({ error: "Invalid view" }, { status: 400 });
     }
 
-    if (
-      priority &&
-      priority !== "ALL" &&
-      !allowedPriorities.includes(
-        priority as (typeof allowedPriorities)[number]
-      )
-    ) {
-      return errorResponse("Invalid task priority.", 400);
+    const timeZone = "Asia/Tehran";
+    const today = getDateInTimeZone(timeZone);
+    const selectedDate = dateString ? parseDate(dateString) : parseDate(today);
+
+    if (!selectedDate) {
+      return NextResponse.json(
+        { error: "Invalid date. Use YYYY-MM-DD." },
+        { status: 400 },
+      );
     }
 
-    const orderBy: Prisma.TaskOrderByWithRelationInput =
-    sort === "title"
-        ? { title: order }
-        : sort === "dueDate"
-            ? { dueDate: order }
-                : sort === "priority"
-                    ? { priority: order }
-                        : { createdAt: order };
+    const where = {
+      userId: user.id,
+      ...(view === "day"
+        ? {
+            isCompleted: false,
+            scheduledDate: { equals: selectedDate },
+          }
+        : {}),
+      ...(view === "missed"
+        ? {
+            isCompleted: false,
+            scheduledDate: { lt: parseDate(today)! },
+          }
+        : {}),
+      ...(view === "upcoming"
+        ? {
+            isCompleted: false,
+            scheduledDate: { gt: parseDate(today)! },
+          }
+        : {}),
+      ...(view === "completed"
+        ? {
+            isCompleted: true,
+            ...(dateString
+              ? { scheduledDate: { equals: selectedDate } }
+              : {}),
+          }
+        : {}),
+    };
 
     const tasks = await prisma.task.findMany({
-      where: {
-        userId: user.id,
-        ...(search
-          ? {
-              OR: [
-                { title: { contains: search, mode: "insensitive" } },
-                {
-                  description: {
-                    contains: search,
-                    mode: "insensitive",
-                  },
-                },
-              ],
-            }
-          : {}),
-        ...(status && status !== "ALL"
-          ? { status: status as (typeof allowedStatuses)[number] }
-          : {}),
-        ...(priority && priority !== "ALL"
-          ? {
-              priority:
-                priority as (typeof allowedPriorities)[number],
-            }
-          : {}),
-        ...(categoryId ? { categoryId } : {}),
-      },
-      orderBy,
-      include: {
-        category: true,
-        subtasks: {
-          orderBy: { position: "asc" },
-        },
-        goals: {
-          include: {
-            goal: true,
-          },
-        },
-      },
-    });
+  where,
+  orderBy: [
+    { scheduledDate: "asc" },
+    { startTime: { sort: "asc", nulls: "last" } },
+    { createdAt: "asc" },
+  ],
+});
 
-    return Response.json({ tasks });
+    return NextResponse.json({ tasks, today, timeZone });
   } catch (error) {
-    console.error("Get tasks failed:", error);
-    return errorResponse("Failed to retrieve tasks.", 500);
+    console.error("GET /api/tasks:", error);
+    return NextResponse.json(
+      { error: "Failed to fetch tasks" },
+      { status: 500 },
+    );
   }
 }
+
 
 export async function POST(request: NextRequest) {
   try {
     const user = await getCurrentUser();
 
     if (!user) {
-      return errorResponse("You must be logged in.", 401);
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    let body: unknown;
+    const body = await request.json();
+    const title = typeof body.title === "string" ? body.title.trim() : "";
+    const scheduledDate = parseDate(body.scheduledDate);
 
-    try {
-      body = await request.json();
-    } catch {
-      return errorResponse("Invalid request body.", 400);
-    }
+    const startTime =
+      typeof body.startTime === "string" && body.startTime.trim()
+        ? body.startTime.trim()
+        : null;
 
-    if (!isRecord(body)) {
-      return errorResponse("Invalid request data.", 400);
-    }
+    const endTime =
+      typeof body.endTime === "string" && body.endTime.trim()
+        ? body.endTime.trim()
+        : null;
 
-    const title =
-      typeof body.title === "string" ? body.title.trim() : "";
-
-    if (!title) {
-      return errorResponse("Task title is required.", 400);
-    }
-
-    if (title.length > 200) {
-      return errorResponse(
-        "Task title must not exceed 200 characters.",
-        400
+    if (!title || title.length > 200) {
+      return NextResponse.json(
+        { error: "Title is required and must be at most 200 characters." },
+        { status: 400 },
       );
     }
 
-    let description: string | null = null;
-
-    if (body.description !== undefined && body.description !== null) {
-      if (typeof body.description !== "string") {
-        return errorResponse("Description must be a string.", 400);
-      }
-
-      description = body.description.trim() || null;
-
-      if (description && description.length > 5000) {
-        return errorResponse(
-          "Description must not exceed 5000 characters.",
-          400
-        );
-      }
+    if (!scheduledDate) {
+      return NextResponse.json(
+        { error: "A valid scheduledDate is required (YYYY-MM-DD)." },
+        { status: 400 },
+      );
     }
 
-    let status: (typeof allowedStatuses)[number] = "TODO";
-
-    if (body.status !== undefined) {
-      if (
-        typeof body.status !== "string" ||
-        !allowedStatuses.includes(
-          body.status as (typeof allowedStatuses)[number]
-        )
-      ) {
-        return errorResponse("Invalid task status.", 400);
-      }
-
-      status = body.status as (typeof allowedStatuses)[number];
+    if ((startTime && !endTime) || (!startTime && endTime)) {
+      return NextResponse.json(
+        { error: "Both startTime and endTime must be provided together." },
+        { status: 400 },
+      );
     }
 
-    let priority: (typeof allowedPriorities)[number] = "MEDIUM";
-
-    if (body.priority !== undefined) {
-      if (
-        typeof body.priority !== "string" ||
-        !allowedPriorities.includes(
-          body.priority as (typeof allowedPriorities)[number]
-        )
-      ) {
-        return errorResponse("Invalid task priority.", 400);
-      }
-
-      priority = body.priority as (typeof allowedPriorities)[number];
-    }
-
-    let dueDate: Date | null = null;
+    const timePattern = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
     if (
-      body.dueDate !== undefined &&
-      body.dueDate !== null &&
-      body.dueDate !== ""
+      (startTime && !timePattern.test(startTime)) ||
+      (endTime && !timePattern.test(endTime))
     ) {
-      if (typeof body.dueDate !== "string") {
-        return errorResponse("Due date must be a string.", 400);
-      }
-
-      dueDate = new Date(body.dueDate);
-
-      if (Number.isNaN(dueDate.getTime())) {
-        return errorResponse("Invalid due date.", 400);
-      }
+      return NextResponse.json(
+        { error: "Times must use HH:mm format." },
+        { status: 400 },
+      );
     }
 
-    let categoryId: string | null = null;
-
-    if (body.categoryId !== undefined && body.categoryId !== null) {
-      if (typeof body.categoryId !== "string") {
-        return errorResponse("Invalid category.", 400);
-      }
-
-      categoryId = body.categoryId.trim() || null;
-
-      if (categoryId) {
-        const category = await prisma.category.findFirst({
-          where: {
-            id: categoryId,
-            userId: user.id,
-          },
-          select: { id: true },
-        });
-
-        if (!category) {
-          return errorResponse("Category not found.", 404);
-        }
-      }
+    if (startTime && endTime && startTime >= endTime) {
+      return NextResponse.json(
+        { error: "End time must be later than start time." },
+        { status: 400 },
+      );
     }
+
+    const toDateTime = (time: string | null) => {
+      if (!time) return null;
+
+      const [hours, minutes] = time.split(":").map(Number);
+      const result = new Date(scheduledDate);
+      result.setUTCHours(hours, minutes, 0, 0);
+      return result;
+    };
 
     const task = await prisma.task.create({
       data: {
         title,
-        description,
-        status,
-        priority,
-        dueDate,
-        completedAt: status === "DONE" ? new Date() : null,
-        categoryId,
+        scheduledDate,
+        startTime: toDateTime(startTime),
+        endTime: toDateTime(endTime),
         userId: user.id,
-      },
-      include: {
-        category: true,
-        subtasks: true,
-        goals: {
-          include: {
-            goal: true,
-          },
-        },
       },
     });
 
-    return Response.json(
-      {
-        message: "Task created successfully.",
-        task,
-      },
-      { status: 201 }
-    );
+    return NextResponse.json({ task }, { status: 201 });
   } catch (error) {
-    console.error("Create task failed:", error);
-    return errorResponse("Failed to create task.", 500);
+    console.error("POST /api/tasks:", error);
+    return NextResponse.json(
+      { error: "Failed to create task" },
+      { status: 500 },
+    );
   }
 }
+
