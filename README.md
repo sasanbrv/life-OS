@@ -1,108 +1,79 @@
-# Life OS
+# Life OS 🧠
 
-**A personal productivity and life management application.**
+**Your personal life management dashboard.**
+**view Demo :** 
+## https://life-os-mi1l.vercel.app/dashboard
 
-Life OS brings task management, daily planning, goal tracking, and habit tracking together in one application.
+Life OS is a personal productivity application built to help you organize your daily life, manage tasks, track habits, and keep your daily notes in one place.
 
-## Features
+## ✨ Features
 
-### Task Management
-- Create, edit, and delete tasks.
-- Set task status and priority.
-- Organize tasks using categories.
-- Add descriptions and due dates.
-- Search, filter, and sort tasks.
-- View tasks in list, Kanban, and calendar layouts.
+- ✅ **Task Management** — Organize and manage your tasks.
+- 🔁 **Habit Tracking** — Build consistent routines and track your habits.
+- 📝 **Daily Notes** — Keep your daily thoughts and notes organized.
+- 🔐 **Authentication** — User accounts and session-based authentication.
+- 📊 **Personal Dashboard** — Access your productivity tools from one place.
 
-### Checklists
-- Break tasks into smaller subtasks.
-- Add, complete, and delete checklist items.
-- Track checklist completion progress.
+## 🛠️ Tech Stack
 
-### My Day
-- Add existing tasks to a daily plan.
-- Organize daily selections by date.
-
-### Goals
-- Create, edit, and delete goals.
-- Add descriptions and date information.
-- Track progress manually.
-- Associate tasks with goals.
-
-### Habits
-- Create and manage habits.
-- Configure daily or weekly recurrence.
-- Track completion by date.
-- Activate or deactivate habits.
-
-### Dashboard
-- Access a centralized overview of productivity information.
-
-### Authentication
-- Session-based authentication.
-- Protected application pages.
-- User-specific data access.
-
-## Tech Stack
-
-- **Framework:** Next.js App Router
+- **Framework:** Next.js (App Router)
 - **Language:** TypeScript
-- **UI:** React
 - **Styling:** Tailwind CSS
 - **Database:** PostgreSQL
 - **ORM:** Prisma
-- **Runtime:** Node.js
-- **Package Manager:** npm
+- **Database Hosting:** Neon
+- **Deployment:** Vercel
 
-## Requirements
+## 🚀 Getting Started
 
-Before running the project, make sure you have installed:
+### Prerequisites
+
+Make sure you have the following installed:
 
 - Node.js
 - npm
-- PostgreSQL
+- PostgreSQL database or a Neon PostgreSQL database
 
-## Installation
+### 1. Clone the repository
 
-### 1. Install dependencies
+```bash
+git clone https://github.com/sasanbrv/life-OS.git
+cd life-OS
+```
 
-Clone the repository or open the existing project directory, then run:
+### 2. Install dependencies
 
 ```bash
 npm install
 ```
 
-### 2. Configure environment variables
+### 3. Configure environment variables
 
-Create a `.env` file in the project root and configure the database connection expected by the application.
-
-Example:
+Create a `.env` file in the project root and add your database connection string:
 
 ```env
-DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/DATABASE_NAME"
+DATABASE_URL="your_postgresql_connection_string"
 ```
 
-Replace the example values with your actual PostgreSQL connection details.
+Replace the placeholder with your own PostgreSQL connection string. Never commit your `.env` file or expose database credentials publicly.
 
-Make sure the environment variable matches the configuration in `prisma.config.ts`.
-
-### 3. Generate Prisma Client
+### 4. Generate Prisma Client
 
 ```bash
 npx prisma generate
 ```
 
-### 4. Set up the database
+### 5. Run database migrations
 
-If the project already contains Prisma migrations, apply them using:
+If you are setting up a new database, apply the project's migrations:
 
 ```bash
-npx prisma migrate dev
+npx prisma migrate deploy
 ```
 
-Use the appropriate database setup process for your environment. Do not reset an existing database unless you intentionally want to discard its data.
+Make sure your database connection is configured correctly before running migrations.
 
-### 5. Start the development server
+### 6. Start the development server
 
 ```bash
 npm run dev
@@ -110,57 +81,40 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-## Project Structure
+## 🌐 Deployment
+
+Life OS can be deployed on [Vercel](https://vercel.com/).
+
+1. Import the GitHub repository into Vercel.
+2. Configure the required environment variables in the project settings.
+3. Ensure the build command generates the Prisma Client before building the application.
+4. Deploy the project.
+
+## 📁 Project Structure
 
 ```text
-life-os/
-├── app/
-│   ├── (app)/
-│   │   ├── tasks/
-│   │   ├── my-day/
-│   │   ├── goals/
-│   │   └── habits/
-│   ├── api/
-│   ├── generated/
-│   │   └── prisma/
-│   ├── login/
-│   └── layout.tsx
-├── lib/
-│   ├── auth.ts
-│   └── prisma.ts
+life-OS/
+├── app/                  # Next.js application and routes
+├── lib/                  # Shared utilities and authentication
 ├── prisma/
-│   └── schema.prisma
-├── prisma7.config.ts
+│   ├── schema.prisma     # Database schema
+│   └── migrations/       # Database migrations
+├── prisma7.config.ts     # Prisma configuration
 ├── package.json
 └── README.md
 ```
 
-This structure highlights the main application areas. Additional files and API routes are omitted for readability.
+## 🔒 Security
 
-## Development Commands
+- Keep database credentials and secrets in environment variables.
+- Never commit `.env` files.
+- Use environment-specific credentials for development and production.
+- Keep dependencies up to date.
 
-| Command | Description |
-|---|---|
-| `npm run dev` | Start the development server |
-| `npm run build` | Build the application |
-| `npm run start` | Start the production server |
-| `npx prisma generate` | Generate Prisma Client |
-| `npx prisma migrate dev` | Apply development migrations |
+## 📄 License
 
-The available npm scripts are defined in `package.json`.
+No license has been specified yet.
 
-## Security
+---
 
-- Keep database credentials and secrets out of version control.
-- Never commit sensitive `.env` files.
-- Authenticate requests before accessing protected resources.
-- Restrict database operations to records owned by the authenticated user.
-- Review database migrations before applying them to production.
-
-## Project Status
-
-Life OS is under active development. Features and implementation details may change as the project evolves.
-
-## License
-
-No license has been specified yet. All rights are reserved unless a license is added to the repository.
+Built with ❤️ using Next.js, TypeScript, Prisma, and PostgreSQL.
