@@ -2,7 +2,7 @@
 
 **Your personal life management dashboard.**
 **view Demo :** 
-## https://life-os-mi1l.vercel.app/dashboard
+## https://life-os-mi1l.vercel.app
 
 Life OS is a personal productivity application built to help you organize your daily life, manage tasks, track habits, and keep your daily notes in one place.
 
